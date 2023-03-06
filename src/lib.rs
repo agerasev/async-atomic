@@ -1,3 +1,16 @@
+//! Atomics which can be subscribed to and asynchronously notify when updated.
+//!
+//! The main structure is [`AsyncAtomic`] that behaves like stdlib's atomics,
+//! but don't take an explicit [`Ordering`](`core::sync::atomic::Ordering`) for simplicity.
+//!
+//! An [`AtomicSubscriber`] can be splitted off from [`AsyncAtomic`] to asynchronously wait for changes.
+//! It is only one subscriber allowed for each atomic.
+
+#![no_std]
+
+#[cfg(feature = "std")]
+extern crate std;
+
 #[cfg(test)]
 mod tests;
 
@@ -10,8 +23,11 @@ use core::{
     task::{Context, Poll},
 };
 use futures::task::AtomicWaker;
+#[cfg(feature = "std")]
 use std::sync::Arc;
 
+/// Atomic value that also contains [`Waker`](`core::task::Waker`) to notify subscriber asynchronously.
+#[derive(Default, Debug)]
 pub struct AsyncAtomic<T: Copy> {
     value: Atomic<T>,
     waker: AtomicWaker,
@@ -25,75 +41,88 @@ impl<T: Copy> AsyncAtomic<T> {
         }
     }
 
-    pub fn load(&self, order: Ordering) -> T {
-        self.value.load(order)
+    pub fn load(&self) -> T {
+        self.value.load(Ordering::Acquire)
     }
-    pub fn store(&self, val: T, order: Ordering) {
-        self.value.store(val, order);
+    pub fn store(&self, val: T) {
+        self.value.store(val, Ordering::Release);
         self.waker.wake();
     }
-    pub fn swap(&self, val: T, order: Ordering) -> T {
-        let old = self.value.swap(val, order);
+    pub fn swap(&self, val: T) -> T {
+        let old = self.value.swap(val, Ordering::AcqRel);
         self.waker.wake();
         old
     }
-    pub fn compare_exchange(
-        &self,
-        current: T,
-        new: T,
-        success: Ordering,
-        failure: Ordering,
-    ) -> Result<T, T> {
+    pub fn compare_exchange(&self, current: T, new: T) -> Result<T, T> {
         self.value
-            .compare_exchange(current, new, success, failure)
+            .compare_exchange(current, new, Ordering::AcqRel, Ordering::Acquire)
             .map(|x| {
                 self.waker.wake();
                 x
             })
     }
-    pub fn compare_exchange_weak(
-        &self,
-        current: T,
-        new: T,
-        success: Ordering,
-        failure: Ordering,
-    ) -> Result<T, T> {
+    pub fn fetch_update<F: FnMut(T) -> Option<T>>(&self, f: F) -> Result<T, T> {
         self.value
-            .compare_exchange_weak(current, new, success, failure)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, f)
             .map(|x| {
                 self.waker.wake();
                 x
             })
-    }
-    pub fn fetch_update<F: FnMut(T) -> Option<T>>(
-        &self,
-        set_order: Ordering,
-        fetch_order: Ordering,
-        f: F,
-    ) -> Result<T, T> {
-        self.value.fetch_update(set_order, fetch_order, f).map(|x| {
-            self.waker.wake();
-            x
-        })
     }
 }
 
-macro_rules! impl_atomic_num {
+macro_rules! impl_atomic_bitwise {
     ($T:ty) => {
         impl AsyncAtomic<$T> {
-            pub fn fetch_add(&self, val: $T, order: Ordering) -> $T {
-                let old = self.value.fetch_add(val, order);
+            pub fn fetch_and(&self, val: $T) -> $T {
+                let old = self.value.fetch_and(val, Ordering::AcqRel);
                 self.waker.wake();
                 old
             }
-            pub fn fetch_sub(&self, val: $T, order: Ordering) -> $T {
-                let old = self.value.fetch_sub(val, order);
+            pub fn fetch_or(&self, val: $T) -> $T {
+                let old = self.value.fetch_or(val, Ordering::AcqRel);
+                self.waker.wake();
+                old
+            }
+            pub fn fetch_xor(&self, val: $T) -> $T {
+                let old = self.value.fetch_xor(val, Ordering::AcqRel);
                 self.waker.wake();
                 old
             }
         }
     };
 }
+
+macro_rules! impl_atomic_num {
+    ($T:ty) => {
+        impl_atomic_bitwise!($T);
+
+        impl AsyncAtomic<$T> {
+            pub fn fetch_add(&self, val: $T) -> $T {
+                let old = self.value.fetch_add(val, Ordering::AcqRel);
+                self.waker.wake();
+                old
+            }
+            pub fn fetch_sub(&self, val: $T) -> $T {
+                let old = self.value.fetch_sub(val, Ordering::AcqRel);
+                self.waker.wake();
+                old
+            }
+            pub fn fetch_max(&self, val: $T) -> $T {
+                let old = self.value.fetch_max(val, Ordering::AcqRel);
+                self.waker.wake();
+                old
+            }
+            pub fn fetch_min(&self, val: $T) -> $T {
+                let old = self.value.fetch_min(val, Ordering::AcqRel);
+                self.waker.wake();
+                old
+            }
+        }
+    };
+}
+
+impl_atomic_bitwise!(bool);
 
 impl_atomic_num!(u8);
 impl_atomic_num!(u16);
@@ -108,15 +137,19 @@ impl_atomic_num!(i64);
 impl_atomic_num!(isize);
 
 impl<T: Copy> AsyncAtomic<T> {
+    #[cfg(feature = "std")]
+    /// Split subscriber off using [`Arc`].
     pub fn split(self) -> (Arc<Self>, AtomicSubscriber<T, Arc<Self>>) {
         let arc = Arc::new(self);
         (arc.clone(), unsafe { AtomicSubscriber::new(arc) })
     }
+    /// Split subscriber off using reference.
     pub fn split_ref(&mut self) -> (&Self, AtomicSubscriber<T, &Self>) {
         (self, unsafe { AtomicSubscriber::new(self) })
     }
 }
 
+/// Subscriber of the atomic variable.
 pub struct AtomicSubscriber<T: Copy, D: Deref<Target = AsyncAtomic<T>>> {
     owner: D,
 }
@@ -130,28 +163,20 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> AtomicSubscriber<T, D> {
     }
 
     /// Asynchronously wait for predicate to be `true`.
-    pub fn wait<F: Fn(T) -> bool>(&self, order: Ordering, pred: F) -> Wait<'_, T, F> {
+    pub fn wait<F: Fn(T) -> bool>(&self, pred: F) -> Wait<'_, T, F> {
         Wait {
             owner: &self.owner,
-            order,
             pred,
         }
     }
 
-    /// Asynchronously wait until `f` returned `Some(x)` and then store `x` in atomic.
+    /// Asynchronously wait until `map` returned `Some(x)` and then store `x` in atomic.
     ///
-    /// This is an asynchronous version of [`Atomic::fetch_update`].
-    pub fn wait_and_update<F: Fn(T) -> Option<T>>(
-        &self,
-        set_order: Ordering,
-        fetch_order: Ordering,
-        f: F,
-    ) -> WaitAndUpdate<'_, T, F> {
+    /// This is an asynchronous version of [`AsyncAtomic::fetch_update`].
+    pub fn wait_and_update<F: Fn(T) -> Option<T>>(&self, map: F) -> WaitAndUpdate<'_, T, F> {
         WaitAndUpdate {
             owner: &self.owner,
-            set_order,
-            fetch_order,
-            f,
+            map,
         }
     }
 }
@@ -170,16 +195,15 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> Deref for AtomicSubscriber<T, D
 /// Evaluate predicate on store to avoid spurious wakeups.
 pub struct Wait<'a, T: Copy, F: Fn(T) -> bool> {
     owner: &'a AsyncAtomic<T>,
-    order: Ordering,
     pred: F,
 }
-impl<'a, T: Copy, F: Fn(T) -> bool> Unpin for Wait<'a, T, F> {}
+
 impl<'a, T: Copy, F: Fn(T) -> bool> Future for Wait<'a, T, F> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.owner.waker.register(cx.waker());
-        let value = self.owner.value.load(self.order);
+        let value = self.owner.value.load(Ordering::Acquire);
         if (self.pred)(value) {
             Poll::Ready(value)
         } else {
@@ -188,14 +212,12 @@ impl<'a, T: Copy, F: Fn(T) -> bool> Future for Wait<'a, T, F> {
     }
 }
 
-/// Future to wait and update atomic value based on a preicate.
+/// Future to wait and update an atomic value.
 pub struct WaitAndUpdate<'a, T: Copy, F: Fn(T) -> Option<T>> {
     owner: &'a AsyncAtomic<T>,
-    f: F,
-    set_order: Ordering,
-    fetch_order: Ordering,
+    map: F,
 }
-impl<'a, T: Copy, F: Fn(T) -> Option<T>> Unpin for WaitAndUpdate<'a, T, F> {}
+
 impl<'a, T: Copy, F: Fn(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
     type Output = T;
 
@@ -204,7 +226,7 @@ impl<'a, T: Copy, F: Fn(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
         match self
             .owner
             .value
-            .fetch_update(self.set_order, self.fetch_order, &self.f)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, &self.map)
         {
             Ok(x) => Poll::Ready(x),
             Err(_) => Poll::Pending,

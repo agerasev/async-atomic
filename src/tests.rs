@@ -4,7 +4,7 @@ use async_std::{
     task::{sleep, spawn},
     test as async_test,
 };
-use std::{sync::atomic::Ordering, time::Duration};
+use std::time::Duration;
 
 const SMALL_TIMEOUT: Duration = Duration::from_millis(10);
 const BIG_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -13,23 +13,14 @@ const BIG_TIMEOUT: Duration = Duration::from_millis(1000);
 async fn waiting() {
     let (val, sub) = AsyncAtomic::<usize>::new(0).split();
 
-    assert!(
-        timeout(SMALL_TIMEOUT, sub.wait(Ordering::Acquire, |x| x > 0))
-            .await
-            .is_err()
-    );
+    assert!(timeout(SMALL_TIMEOUT, sub.wait(|x| x > 0)).await.is_err());
 
     spawn(async move {
         sleep(SMALL_TIMEOUT).await;
-        assert_eq!(val.fetch_add(1, Ordering::Release), 0);
+        assert_eq!(val.fetch_add(1,), 0);
     });
 
-    assert_eq!(
-        timeout(BIG_TIMEOUT, sub.wait(Ordering::Acquire, |x| x > 0))
-            .await
-            .unwrap(),
-        1
-    );
+    assert_eq!(timeout(BIG_TIMEOUT, sub.wait(|x| x > 0)).await.unwrap(), 1);
 }
 
 #[async_test]
@@ -41,12 +32,12 @@ async fn concurrent_increment() {
         let val = val.clone();
         spawn(async move {
             sleep(SMALL_TIMEOUT).await;
-            val.fetch_add(1, Ordering::Release);
+            val.fetch_add(1);
         });
     }
 
     assert_eq!(
-        timeout(BIG_TIMEOUT, sub.wait(Ordering::Acquire, |x| x == COUNT))
+        timeout(BIG_TIMEOUT, sub.wait(|x| x == COUNT))
             .await
             .unwrap(),
         COUNT
@@ -65,15 +56,21 @@ async fn ping_pong() {
         async move {
             for _ in 0..CONS_VAL {
                 sleep(SMALL_TIMEOUT).await;
-                val.fetch_add(PROD_VAL, Ordering::Release);
+                val.fetch_add(PROD_VAL);
             }
         }
     });
 
     for _ in 0..PROD_VAL {
-        sub.wait(Ordering::Acquire, |x| x >= CONS_VAL).await;
-        sub.fetch_sub(CONS_VAL, Ordering::Release);
+        sub.wait_and_update(|x| {
+            if x >= CONS_VAL {
+                Some(x - CONS_VAL)
+            } else {
+                None
+            }
+        })
+        .await;
     }
 
-    assert_eq!(val.load(Ordering::Acquire), 0);
+    assert_eq!(val.load(), 0);
 }
