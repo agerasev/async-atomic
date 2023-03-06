@@ -1,0 +1,18 @@
+[package]
+name = "async-atomic"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["std", "fallback"]
+std = ["atomic/std", "futures/std"]
+fallback = ["atomic/fallback"]
+
+[dependencies]
+atomic = { version = "0.5.1", default-features = false }
+futures = { version = "0.3.26", default-features = false }
+
+[dev-dependencies]
+async-std = { version = "1.12.0", features = ["attributes"] }
