@@ -2,8 +2,16 @@
 name = "async-atomic"
 version = "0.1.0"
 edition = "2021"
+authors = ["Alexey Gerasev <alexey.gerasev@gmail.com>"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Atomics which can be subscribed to and asynchronously notify when updated"
+documentation = "https://docs.rs/async-atomic"
+homepage = "https://github.com/agerasev/async-atomic"
+repository = "https://github.com/agerasev/async-atomic.git"
+readme = "README.md"
+keywords = ["async", "atomic"]
+categories = ["asynchronous", "concurrency", "no-std"]
+license = "MIT/Apache-2.0"
 
 [features]
 default = ["std", "fallback"]
