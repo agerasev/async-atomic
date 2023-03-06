@@ -1,9 +1,9 @@
 //! Atomics which can be subscribed to and asynchronously notify when updated.
 //!
-//! The main structure is [`AsyncAtomic`] that behaves like stdlib's atomics,
+//! The main structure is [`Atomic`] that behaves like stdlib's atomics,
 //! but don't take an explicit [`Ordering`](`core::sync::atomic::Ordering`) for simplicity.
 //!
-//! An [`AtomicSubscriber`] can be splitted off from [`AsyncAtomic`] to asynchronously wait for changes.
+//! An [`Subscriber`] can be created from [`Atomic`] to asynchronously wait for changes.
 //! It is only one subscriber allowed for each atomic.
 
 #![no_std]
@@ -14,7 +14,7 @@ extern crate std;
 #[cfg(test)]
 mod tests;
 
-use atomic::Atomic;
+use atomic::Atomic as BasicAtomic;
 use core::{
     future::Future,
     ops::Deref,
@@ -28,15 +28,15 @@ use std::sync::Arc;
 
 /// Atomic value that also contains [`Waker`](`core::task::Waker`) to notify subscriber asynchronously.
 #[derive(Default, Debug)]
-pub struct AsyncAtomic<T: Copy> {
-    value: Atomic<T>,
+pub struct Atomic<T: Copy> {
+    value: BasicAtomic<T>,
     waker: AtomicWaker,
 }
 
-impl<T: Copy> AsyncAtomic<T> {
+impl<T: Copy> Atomic<T> {
     pub fn new(value: T) -> Self {
         Self {
-            value: Atomic::new(value),
+            value: BasicAtomic::new(value),
             waker: AtomicWaker::new(),
         }
     }
@@ -73,7 +73,7 @@ impl<T: Copy> AsyncAtomic<T> {
 
 macro_rules! impl_atomic_bitwise {
     ($T:ty) => {
-        impl AsyncAtomic<$T> {
+        impl Atomic<$T> {
             pub fn fetch_and(&self, val: $T) -> $T {
                 let old = self.value.fetch_and(val, Ordering::AcqRel);
                 self.waker.wake();
@@ -97,7 +97,7 @@ macro_rules! impl_atomic_num {
     ($T:ty) => {
         impl_atomic_bitwise!($T);
 
-        impl AsyncAtomic<$T> {
+        impl Atomic<$T> {
             pub fn fetch_add(&self, val: $T) -> $T {
                 let old = self.value.fetch_add(val, Ordering::AcqRel);
                 self.waker.wake();
@@ -136,25 +136,30 @@ impl_atomic_num!(i32);
 impl_atomic_num!(i64);
 impl_atomic_num!(isize);
 
-impl<T: Copy> AsyncAtomic<T> {
+impl<T: Copy> Atomic<T> {
+    /// Create subscriber using [`Arc`].
     #[cfg(feature = "std")]
-    /// Split subscriber off using [`Arc`].
-    pub fn split(self) -> (Arc<Self>, AtomicSubscriber<T, Arc<Self>>) {
-        let arc = Arc::new(self);
-        (arc.clone(), unsafe { AtomicSubscriber::new(arc) })
+    pub fn subscribe(self) -> Subscriber<T> {
+        unsafe { Subscriber::new(Arc::new(self)) }
     }
-    /// Split subscriber off using reference.
-    pub fn split_ref(&mut self) -> (&Self, AtomicSubscriber<T, &Self>) {
-        (self, unsafe { AtomicSubscriber::new(self) })
+    /// Create subscriber using reference.
+    pub fn subscribe_ref(&mut self) -> RefSubscriber<T> {
+        unsafe { RefSubscriber::new(self) }
     }
 }
 
-/// Subscriber of the atomic variable.
-pub struct AtomicSubscriber<T: Copy, D: Deref<Target = AsyncAtomic<T>>> {
+pub struct GenericSubscriber<T: Copy, D: Deref<Target = Atomic<T>>> {
     owner: D,
 }
 
-impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> AtomicSubscriber<T, D> {
+/// Subscriber of the atomic variable.
+///
+/// References to an underlying atomic could be obtained using [`Deref`].
+#[cfg(feature = "std")]
+pub type Subscriber<T> = GenericSubscriber<T, Arc<Atomic<T>>>;
+pub type RefSubscriber<'a, T> = GenericSubscriber<T, &'a Atomic<T>>;
+
+impl<T: Copy, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
     /// # Safety
     ///
     /// Only one subscriber allowed for an atomic value.
@@ -163,7 +168,7 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> AtomicSubscriber<T, D> {
     }
 
     /// Asynchronously wait for predicate to be `true`.
-    pub fn wait<F: Fn(T) -> bool>(&self, pred: F) -> Wait<'_, T, F> {
+    pub fn wait<F: Fn(T) -> bool>(&mut self, pred: F) -> Wait<'_, T, F> {
         Wait {
             owner: &self.owner,
             pred,
@@ -172,8 +177,8 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> AtomicSubscriber<T, D> {
 
     /// Asynchronously wait until `map` returned `Some(x)` and then store `x` in atomic.
     ///
-    /// This is an asynchronous version of [`AsyncAtomic::fetch_update`].
-    pub fn wait_and_update<F: Fn(T) -> Option<T>>(&self, map: F) -> WaitAndUpdate<'_, T, F> {
+    /// This is an asynchronous version of [`Atomic::fetch_update`].
+    pub fn wait_and_update<F: Fn(T) -> Option<T>>(&mut self, map: F) -> WaitAndUpdate<'_, T, F> {
         WaitAndUpdate {
             owner: &self.owner,
             map,
@@ -181,7 +186,7 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> AtomicSubscriber<T, D> {
     }
 }
 
-impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> Deref for AtomicSubscriber<T, D> {
+impl<T: Copy, D: Deref<Target = Atomic<T>>> Deref for GenericSubscriber<T, D> {
     type Target = D;
     fn deref(&self) -> &Self::Target {
         &self.owner
@@ -194,7 +199,7 @@ impl<T: Copy, D: Deref<Target = AsyncAtomic<T>>> Deref for AtomicSubscriber<T, D
 ///
 /// Evaluate predicate on store to avoid spurious wakeups.
 pub struct Wait<'a, T: Copy, F: Fn(T) -> bool> {
-    owner: &'a AsyncAtomic<T>,
+    owner: &'a Atomic<T>,
     pred: F,
 }
 
@@ -214,7 +219,7 @@ impl<'a, T: Copy, F: Fn(T) -> bool> Future for Wait<'a, T, F> {
 
 /// Future to wait and update an atomic value.
 pub struct WaitAndUpdate<'a, T: Copy, F: Fn(T) -> Option<T>> {
-    owner: &'a AsyncAtomic<T>,
+    owner: &'a Atomic<T>,
     map: F,
 }
 

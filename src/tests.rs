@@ -1,4 +1,4 @@
-use crate::AsyncAtomic;
+use crate::Atomic;
 use async_std::{
     future::timeout,
     task::{sleep, spawn},
@@ -11,7 +11,8 @@ const BIG_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[async_test]
 async fn waiting() {
-    let (val, sub) = AsyncAtomic::<usize>::new(0).split();
+    let mut sub = Atomic::<usize>::new(0).subscribe();
+    let val = sub.clone();
 
     assert!(timeout(SMALL_TIMEOUT, sub.wait(|x| x > 0)).await.is_err());
 
@@ -26,7 +27,8 @@ async fn waiting() {
 #[async_test]
 async fn concurrent_increment() {
     const COUNT: usize = 256;
-    let (val, sub) = AsyncAtomic::<usize>::new(0).split();
+    let mut sub = Atomic::<usize>::new(0).subscribe();
+    let val = sub.clone();
 
     for _ in 0..COUNT {
         let val = val.clone();
@@ -49,7 +51,8 @@ async fn ping_pong() {
     const PROD_VAL: usize = 29;
     const CONS_VAL: usize = 17;
 
-    let (val, sub) = AsyncAtomic::<usize>::new(0).split();
+    let mut sub = Atomic::<usize>::new(0).subscribe();
+    let val = sub.clone();
 
     spawn({
         let val = val.clone();
