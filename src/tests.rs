@@ -4,7 +4,8 @@ use async_std::{
     task::{sleep, spawn},
     test as async_test,
 };
-use std::time::Duration;
+use futures::stream::StreamExt;
+use std::{time::Duration, vec::Vec};
 
 const SMALL_TIMEOUT: Duration = Duration::from_millis(10);
 const BIG_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -92,4 +93,27 @@ async fn static_() {
     });
 
     assert_eq!(timeout(BIG_TIMEOUT, sub.wait(|x| x > 0)).await.unwrap(), 1);
+}
+
+#[async_test]
+async fn stream() {
+    const COUNT: usize = 64;
+    let sub = Atomic::<usize>::new(0).subscribe();
+    let val = sub.clone();
+
+    spawn(async move {
+        for _ in 0..COUNT {
+            sleep(SMALL_TIMEOUT).await;
+            val.fetch_add(1);
+        }
+    });
+
+    spawn(async move {
+        let stream = sub.into_stream();
+        let data = timeout(BIG_TIMEOUT, stream.take(COUNT + 1).collect::<Vec<_>>())
+            .await
+            .unwrap();
+        assert!(data.into_iter().eq(0..=COUNT));
+    })
+    .await
 }

@@ -8,6 +8,7 @@ use core::{
     sync::atomic::Ordering,
     task::{Context, Poll},
 };
+use futures::Stream;
 
 impl<T: Copy> Atomic<T> {
     /// Wrap `self` in [`Arc`] and then create subscriber from it.
@@ -64,6 +65,16 @@ impl<T: Copy, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
     }
 }
 
+impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
+    /// Convert subscriber into stream that yields when value is changed.
+    pub fn into_stream(self) -> Changed<T, D> {
+        Changed {
+            inner: self.inner,
+            prev: None,
+        }
+    }
+}
+
 impl<T: Copy, D: Deref<Target = Atomic<T>>> Deref for GenericSubscriber<T, D> {
     type Target = D;
     fn deref(&self) -> &Self::Target {
@@ -113,6 +124,26 @@ impl<'a, T: Copy, F: Fn(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
         {
             Ok(x) => Poll::Ready(x),
             Err(_) => Poll::Pending,
+        }
+    }
+}
+
+/// Stream that yields value when it change.
+pub struct Changed<T: Copy + Eq, D: Deref<Target = Atomic<T>>> {
+    inner: D,
+    prev: Option<T>,
+}
+impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> Unpin for Changed<T, D> {}
+impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> Stream for Changed<T, D> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.inner.waker.register(cx.waker());
+        let value = self.inner.value.load(Ordering::Acquire);
+        if self.prev.replace(value) != Some(value) {
+            Poll::Ready(Some(value))
+        } else {
+            Poll::Pending
         }
     }
 }
