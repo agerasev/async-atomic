@@ -18,7 +18,7 @@ async fn waiting() {
 
     spawn(async move {
         sleep(SMALL_TIMEOUT).await;
-        assert_eq!(val.fetch_add(1,), 0);
+        assert_eq!(val.fetch_add(1), 0);
     });
 
     assert_eq!(timeout(BIG_TIMEOUT, sub.wait(|x| x > 0)).await.unwrap(), 1);
@@ -76,4 +76,20 @@ async fn ping_pong() {
     }
 
     assert_eq!(val.load(), 0);
+}
+
+#[async_test]
+async fn static_() {
+    static ATOMIC: Atomic<usize> = Atomic::<usize>::new(0);
+
+    let mut sub = ATOMIC.subscribe_ref();
+
+    assert!(timeout(SMALL_TIMEOUT, sub.wait(|x| x > 0)).await.is_err());
+
+    spawn(async move {
+        sleep(SMALL_TIMEOUT).await;
+        assert_eq!(ATOMIC.fetch_add(1), 0);
+    });
+
+    assert_eq!(timeout(BIG_TIMEOUT, sub.wait(|x| x > 0)).await.unwrap(), 1);
 }

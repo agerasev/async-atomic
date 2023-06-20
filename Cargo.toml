@@ -15,7 +15,8 @@ license = "MIT/Apache-2.0"
 
 [features]
 default = ["std", "fallback"]
-std = ["atomic/std", "futures/std"]
+std = ["alloc", "atomic/std", "futures/std"]
+alloc = []
 fallback = ["atomic/fallback"]
 
 [dependencies]
