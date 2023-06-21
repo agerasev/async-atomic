@@ -3,6 +3,7 @@ use crate::Atomic;
 use alloc::sync::Arc;
 use core::{
     future::Future,
+    marker::PhantomData,
     ops::Deref,
     pin::Pin,
     sync::atomic::Ordering,
@@ -27,8 +28,9 @@ impl<T: Copy> Atomic<T> {
     }
 }
 
-pub struct GenericSubscriber<T: Copy, D: Deref<Target = Atomic<T>>> {
+pub struct GenericSubscriber<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>> = Atomic<T>> {
     inner: D,
+    _ghost: PhantomData<(T, R)>,
 }
 
 /// Subscriber of the atomic variable.
@@ -38,18 +40,21 @@ pub struct GenericSubscriber<T: Copy, D: Deref<Target = Atomic<T>>> {
 pub type Subscriber<T> = GenericSubscriber<T, Arc<Atomic<T>>>;
 pub type RefSubscriber<'a, T> = GenericSubscriber<T, &'a Atomic<T>>;
 
-impl<T: Copy, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
+impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
     /// Create subscriber for atomic.
     ///
     /// *If there are multiple subscribers for single atomic then only one of them is notified.*
     pub fn new(atomic_ref: D) -> Self {
-        Self { inner: atomic_ref }
+        Self {
+            inner: atomic_ref,
+            _ghost: PhantomData,
+        }
     }
 
     /// Asynchronously wait for predicate to be `true`.
     pub fn wait<F: Fn(T) -> bool>(&mut self, pred: F) -> Wait<'_, T, F> {
         Wait {
-            owner: &self.inner,
+            owner: self.inner.as_ref().as_ref(),
             pred,
         }
     }
@@ -59,25 +64,31 @@ impl<T: Copy, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
     /// This is an asynchronous version of [`Atomic::fetch_update`].
     pub fn wait_and_update<F: Fn(T) -> Option<T>>(&mut self, map: F) -> WaitAndUpdate<'_, T, F> {
         WaitAndUpdate {
-            owner: &self.inner,
+            owner: self.inner.as_ref().as_ref(),
             map,
         }
     }
 }
 
-impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> GenericSubscriber<T, D> {
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
     /// Convert subscriber into stream that yields when value is changed.
-    pub fn into_stream(self) -> Changed<T, D> {
+    pub fn into_stream(self) -> Changed<T, D, R> {
         Changed {
             inner: self.inner,
             prev: None,
+            _ghost: PhantomData,
         }
     }
 }
 
-impl<T: Copy, D: Deref<Target = Atomic<T>>> Deref for GenericSubscriber<T, D> {
+impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> Deref for GenericSubscriber<T, D, R> {
     type Target = D;
     fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> AsRef<D> for GenericSubscriber<T, D, R> {
+    fn as_ref(&self) -> &D {
         &self.inner
     }
 }
@@ -86,7 +97,7 @@ impl<T: Copy, D: Deref<Target = Atomic<T>>> Deref for GenericSubscriber<T, D> {
 ///
 /// # Todo
 ///
-/// Evaluate predicate on store to avoid spurious wakeups.
+/// Evaluate predicate on store to avoid spurious wake-ups.
 pub struct Wait<'a, T: Copy, F: Fn(T) -> bool> {
     owner: &'a Atomic<T>,
     pred: F,
@@ -129,17 +140,18 @@ impl<'a, T: Copy, F: Fn(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
 }
 
 /// Stream that yields value when it change.
-pub struct Changed<T: Copy + Eq, D: Deref<Target = Atomic<T>>> {
+pub struct Changed<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>> = Atomic<T>> {
     inner: D,
     prev: Option<T>,
+    _ghost: PhantomData<R>,
 }
-impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> Unpin for Changed<T, D> {}
-impl<T: Copy + Eq, D: Deref<Target = Atomic<T>>> Stream for Changed<T, D> {
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Unpin for Changed<T, D, R> {}
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Stream for Changed<T, D, R> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.inner.waker.register(cx.waker());
-        let value = self.inner.value.load(Ordering::Acquire);
+        self.inner.as_ref().as_ref().waker.register(cx.waker());
+        let value = self.inner.as_ref().as_ref().value.load(Ordering::Acquire);
         if self.prev.replace(value) != Some(value) {
             Poll::Ready(Some(value))
         } else {

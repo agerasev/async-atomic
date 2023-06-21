@@ -111,3 +111,9 @@ impl_atomic_num!(i16);
 impl_atomic_num!(i32);
 impl_atomic_num!(i64);
 impl_atomic_num!(isize);
+
+impl<T: Copy> AsRef<Atomic<T>> for Atomic<T> {
+    fn as_ref(&self) -> &Atomic<T> {
+        self
+    }
+}
