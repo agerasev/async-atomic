@@ -1,0 +1,9 @@
+default:
+  image: rust
+
+test:
+  stage: test
+  script:
+    - cargo test
+    - cargo check --no-default-features --features=alloc
+    - cargo check --no-default-features

@@ -52,7 +52,7 @@ impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
     }
 
     /// Asynchronously wait for predicate to be `true`.
-    pub fn wait<F: Fn(T) -> bool>(&mut self, pred: F) -> Wait<'_, T, F> {
+    pub fn wait<F: FnMut(T) -> bool>(&mut self, pred: F) -> Wait<'_, T, F> {
         Wait {
             owner: self.inner.as_ref().as_ref(),
             pred,
@@ -62,7 +62,7 @@ impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
     /// Asynchronously wait until `map` returned `Some(x)` and then store `x` in atomic.
     ///
     /// This is an asynchronous version of [`Atomic::fetch_update`].
-    pub fn wait_and_update<F: Fn(T) -> Option<T>>(&mut self, map: F) -> WaitAndUpdate<'_, T, F> {
+    pub fn wait_and_update<F: FnMut(T) -> Option<T>>(&mut self, map: F) -> WaitAndUpdate<'_, T, F> {
         WaitAndUpdate {
             owner: self.inner.as_ref().as_ref(),
             map,
@@ -98,15 +98,15 @@ impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> AsRef<D> for GenericSubscriber<T
 /// # Todo
 ///
 /// Evaluate predicate on store to avoid spurious wake-ups.
-pub struct Wait<'a, T: Copy, F: Fn(T) -> bool> {
+pub struct Wait<'a, T: Copy, F: FnMut(T) -> bool> {
     owner: &'a Atomic<T>,
     pred: F,
 }
-impl<'a, T: Copy, F: Fn(T) -> bool> Unpin for Wait<'a, T, F> {}
-impl<'a, T: Copy, F: Fn(T) -> bool> Future for Wait<'a, T, F> {
+impl<'a, T: Copy, F: FnMut(T) -> bool> Unpin for Wait<'a, T, F> {}
+impl<'a, T: Copy, F: FnMut(T) -> bool> Future for Wait<'a, T, F> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.owner.waker.register(cx.waker());
         let value = self.owner.value.load(Ordering::Acquire);
         if (self.pred)(value) {
@@ -118,20 +118,20 @@ impl<'a, T: Copy, F: Fn(T) -> bool> Future for Wait<'a, T, F> {
 }
 
 /// Future to wait and update an atomic value.
-pub struct WaitAndUpdate<'a, T: Copy, F: Fn(T) -> Option<T>> {
+pub struct WaitAndUpdate<'a, T: Copy, F: FnMut(T) -> Option<T>> {
     owner: &'a Atomic<T>,
     map: F,
 }
-impl<'a, T: Copy, F: Fn(T) -> Option<T>> Unpin for WaitAndUpdate<'a, T, F> {}
-impl<'a, T: Copy, F: Fn(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
+impl<'a, T: Copy, F: FnMut(T) -> Option<T>> Unpin for WaitAndUpdate<'a, T, F> {}
+impl<'a, T: Copy, F: FnMut(T) -> Option<T>> Future for WaitAndUpdate<'a, T, F> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.owner.waker.register(cx.waker());
         match self
             .owner
             .value
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, &self.map)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, &mut self.map)
         {
             Ok(x) => Poll::Ready(x),
             Err(_) => Poll::Pending,
