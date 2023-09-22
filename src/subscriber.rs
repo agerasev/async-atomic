@@ -9,7 +9,7 @@ use core::{
     sync::atomic::Ordering,
     task::{Context, Poll},
 };
-use futures::Stream;
+use futures::stream::{FusedStream, Stream};
 
 impl<T: Copy> Atomic<T> {
     /// Wrap `self` in [`Arc`] and then create subscriber from it.
@@ -157,5 +157,10 @@ impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Stream for Changed<T
         } else {
             Poll::Pending
         }
+    }
+}
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> FusedStream for Changed<T, D, R> {
+    fn is_terminated(&self) -> bool {
+        false
     }
 }

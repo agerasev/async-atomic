@@ -1,6 +1,6 @@
 [package]
 name = "async-atomic"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Alexey Gerasev <alexey.gerasev@gmail.com>"]
 
