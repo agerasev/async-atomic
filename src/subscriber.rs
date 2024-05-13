@@ -72,12 +72,16 @@ impl<T: Copy, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
 
 impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> GenericSubscriber<T, D, R> {
     /// Convert subscriber into stream that yields when value is changed.
-    pub fn into_stream(self) -> Changed<T, D, R> {
+    pub fn changed(self) -> Changed<T, D, R> {
         Changed {
             inner: self.inner,
             prev: None,
             _ghost: PhantomData,
         }
+    }
+
+    pub fn into_stream(self) -> Changed<T, D, R> {
+        self.changed()
     }
 }
 
@@ -145,18 +149,31 @@ pub struct Changed<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>> = Atomi
     prev: Option<T>,
     _ghost: PhantomData<R>,
 }
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Deref for Changed<T, D, R> {
+    type Target = D;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
 impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Unpin for Changed<T, D, R> {}
-impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Stream for Changed<T, D, R> {
-    type Item = T;
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Future for Changed<T, D, R> {
+    type Output = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         self.inner.as_ref().as_ref().waker.register(cx.waker());
         let value = self.inner.as_ref().as_ref().value.load(Ordering::Acquire);
         if self.prev.replace(value) != Some(value) {
-            Poll::Ready(Some(value))
+            Poll::Ready(value)
         } else {
             Poll::Pending
         }
+    }
+}
+impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> Stream for Changed<T, D, R> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.poll(cx).map(Some)
     }
 }
 impl<T: Copy + PartialEq, D: AsRef<R>, R: AsRef<Atomic<T>>> FusedStream for Changed<T, D, R> {
