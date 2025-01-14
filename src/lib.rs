@@ -3,21 +3,21 @@
 //! The main structure is [`Atomic`] that behaves like stdlib's atomics,
 //! but don't take an explicit [`Ordering`](`core::sync::atomic::Ordering`) for simplicity.
 //!
-//! An [`Subscriber`] can be created from [`Atomic`] to asynchronously wait for changes.
-//! It is only one subscriber allowed for each atomic.
+//! An [`Atomic`] can asynchronously wait for changes, but only one waiter will be notified at a time.
 
 #![no_std]
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
-#[cfg(feature = "std")]
-extern crate std;
-
+mod async_;
 mod atomic;
-mod subscriber;
 
-pub use crate::atomic::*;
-pub use subscriber::*;
+pub use atomig::Atom;
 
-#[cfg(all(test, feature = "std"))]
+pub use async_::*;
+pub use atomic::*;
+
+pub mod prelude {
+    pub use crate::AtomicRef;
+}
+
+#[cfg(test)]
 mod tests;
