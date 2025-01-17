@@ -137,7 +137,7 @@ async fn stream() {
     });
 
     spawn(async move {
-        let stream = sub.into_stream();
+        let stream = sub.changed();
         let data = timeout(BIG_TIMEOUT, stream.take(COUNT + 1).collect::<Vec<_>>())
             .await
             .unwrap();

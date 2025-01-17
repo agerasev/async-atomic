@@ -6,6 +6,9 @@ use core::sync::atomic::Ordering;
 use futures::task::AtomicWaker;
 
 /// Atomic value that also contains [`Waker`](`core::task::Waker`) to notify subscriber asynchronously.
+///
+/// *There is only a single waker, so there should be only single subscription at a time.*
+/// *Otherwise older subscriptions will not receive updates anymore.*
 #[derive(Default, Debug)]
 pub struct Atomic<T: Atom> {
     pub(crate) value: BasicAtomic<T>,

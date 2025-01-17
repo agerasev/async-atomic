@@ -3,7 +3,10 @@
 //! The main structure is [`Atomic`] that behaves like stdlib's atomics,
 //! but don't take an explicit [`Ordering`](`core::sync::atomic::Ordering`) for simplicity.
 //!
-//! An [`Atomic`] can asynchronously wait for changes, but only one waiter will be notified at a time.
+//! An [`Atomic`] can asynchronously wait for updates using methods from [`AsyncAtomic`] trait.
+//!
+//! *Note that if there are more than one future at the same time then only the most recently `poll`ed future will be notified.*
+//! *Older futures will never receive an update, so it's up to user to ensure that only one of them `.await`ing at a time.*
 
 #![no_std]
 
@@ -16,7 +19,7 @@ pub use async_::*;
 pub use atomic::*;
 
 pub mod prelude {
-    pub use crate::AtomicRef;
+    pub use crate::AsyncAtomic;
 }
 
 #[cfg(test)]

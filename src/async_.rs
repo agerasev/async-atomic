@@ -10,9 +10,17 @@ use core::{
 use futures::stream::{FusedStream, Stream};
 use pin_project_lite::pin_project;
 
-pub trait AtomicRef {
+/// Generic reference to async atomic.
+///
+/// Contains `async` methods which returns futures that wait for atomic value change.
+///
+/// *After one of the futures `poll`ed, all previously `poll`ed futures will not wake.*
+/// *This may cause a deadlock, however it is not an UB, so these methods are safe.*
+pub trait AsyncAtomic {
+    /// Type stored in atomic.
     type Item: Atom;
 
+    /// Get reference to original atomic structure.
     fn as_atomic(&self) -> &Atomic<Self::Item>;
 
     /// Asynchronously wait for predicate to be `true`.
@@ -41,25 +49,17 @@ pub trait AtomicRef {
             prev: None,
         }
     }
-
-    fn into_stream(self) -> Changed<Self>
-    where
-        Self: Sized,
-        Self::Item: PartialEq + Clone,
-    {
-        self.changed()
-    }
 }
 
-impl<T: Atom> AtomicRef for Atomic<T> {
+impl<T: Atom> AsyncAtomic for Atomic<T> {
     type Item = T;
     fn as_atomic(&self) -> &Atomic<Self::Item> {
         self
     }
 }
 
-impl<R: Deref<Target: AtomicRef>> AtomicRef for R {
-    type Item = <R::Target as AtomicRef>::Item;
+impl<R: Deref<Target: AsyncAtomic>> AsyncAtomic for R {
+    type Item = <R::Target as AsyncAtomic>::Item;
     fn as_atomic(&self) -> &Atomic<Self::Item> {
         self.deref().as_atomic()
     }
@@ -68,24 +68,21 @@ impl<R: Deref<Target: AtomicRef>> AtomicRef for R {
 impl<T: Atom + PartialEq> Atomic<T> {}
 
 /// Future to wait for specific value.
-///
-/// # Todo
-///
-/// Evaluate predicate on store to avoid spurious wake-ups.
-pub struct Wait<R: AtomicRef, F: FnMut(R::Item) -> bool> {
+pub struct Wait<R: AsyncAtomic, F: FnMut(R::Item) -> bool> {
     pub inner: R,
     pub pred: F,
 }
 
-impl<R: AtomicRef, F: FnMut(R::Item) -> bool> Unpin for Wait<R, F> {}
+impl<R: AsyncAtomic, F: FnMut(R::Item) -> bool> Unpin for Wait<R, F> {}
 
-impl<R: AtomicRef, F: FnMut(R::Item) -> bool> Future for Wait<R, F> {
+impl<R: AsyncAtomic, F: FnMut(R::Item) -> bool> Future for Wait<R, F> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let atomic = self.inner.as_atomic();
         atomic.waker.register(cx.waker());
         let value = atomic.value.load(Ordering::Acquire);
+        // TODO: Evaluate predicate on store to avoid spurious wake-ups.
         if (self.pred)(value) {
             Poll::Ready(())
         } else {
@@ -96,13 +93,13 @@ impl<R: AtomicRef, F: FnMut(R::Item) -> bool> Future for Wait<R, F> {
 
 pin_project! {
     /// Future to wait and update an atomic value.
-    pub struct WaitAndUpdate<R: AtomicRef, F: FnMut(R::Item) -> Option<R::Item>> {
+    pub struct WaitAndUpdate<R: AsyncAtomic, F: FnMut(R::Item) -> Option<R::Item>> {
         pub inner: R,
         pub map: F,
     }
 }
 
-impl<R: AtomicRef, F: FnMut(R::Item) -> Option<R::Item>> Future for WaitAndUpdate<R, F> {
+impl<R: AsyncAtomic, F: FnMut(R::Item) -> Option<R::Item>> Future for WaitAndUpdate<R, F> {
     type Output = R::Item;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -120,21 +117,21 @@ impl<R: AtomicRef, F: FnMut(R::Item) -> Option<R::Item>> Future for WaitAndUpdat
 }
 
 /// Stream that yields value when it change.
-pub struct Changed<R: AtomicRef<Item: PartialEq + Clone>> {
+pub struct Changed<R: AsyncAtomic<Item: PartialEq + Clone>> {
     pub inner: R,
     pub prev: Option<R::Item>,
 }
 
-impl<R: AtomicRef<Item: PartialEq + Clone>> Deref for Changed<R> {
+impl<R: AsyncAtomic<Item: PartialEq + Clone>> Deref for Changed<R> {
     type Target = R;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<R: AtomicRef<Item: PartialEq + Clone>> Unpin for Changed<R> {}
+impl<R: AsyncAtomic<Item: PartialEq + Clone>> Unpin for Changed<R> {}
 
-impl<R: AtomicRef<Item: PartialEq + Clone>> Future for Changed<R> {
+impl<R: AsyncAtomic<Item: PartialEq + Clone>> Future for Changed<R> {
     type Output = R::Item;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -153,7 +150,7 @@ impl<R: AtomicRef<Item: PartialEq + Clone>> Future for Changed<R> {
     }
 }
 
-impl<R: AtomicRef<Item: PartialEq + Clone>> Stream for Changed<R> {
+impl<R: AsyncAtomic<Item: PartialEq + Clone>> Stream for Changed<R> {
     type Item = R::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<R::Item>> {
@@ -161,7 +158,7 @@ impl<R: AtomicRef<Item: PartialEq + Clone>> Stream for Changed<R> {
     }
 }
 
-impl<R: AtomicRef<Item: PartialEq + Clone>> FusedStream for Changed<R> {
+impl<R: AsyncAtomic<Item: PartialEq + Clone>> FusedStream for Changed<R> {
     fn is_terminated(&self) -> bool {
         false
     }
