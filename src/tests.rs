@@ -1,6 +1,6 @@
 extern crate std;
 
-use crate::{prelude::*, Atomic};
+use crate::{prelude::*, AsyncAtomic};
 use async_std::{
     future::timeout,
     task::{sleep, spawn},
@@ -15,7 +15,7 @@ const BIG_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[async_test]
 async fn waiting() {
-    let sub = Arc::new(Atomic::<usize>::new(0));
+    let sub = Arc::new(AsyncAtomic::<usize>::new(0));
     let val = sub.clone();
 
     assert!(timeout(SMALL_TIMEOUT, sub.wait(|x| x > 0)).await.is_err());
@@ -45,7 +45,7 @@ async fn waiting() {
 #[async_test]
 async fn concurrent_increment() {
     const COUNT: usize = 256;
-    let sub = Arc::new(Atomic::<usize>::new(0));
+    let sub = Arc::new(AsyncAtomic::<usize>::new(0));
     let val = sub.clone();
 
     for _ in 0..COUNT {
@@ -66,7 +66,7 @@ async fn ping_pong() {
     const PROD_VAL: usize = 29;
     const CONS_VAL: usize = 17;
 
-    let sub = Arc::new(Atomic::<usize>::new(0));
+    let sub = Arc::new(AsyncAtomic::<usize>::new(0));
     let val = sub.clone();
 
     spawn({
@@ -95,7 +95,7 @@ async fn ping_pong() {
 
 #[async_test]
 async fn static_() {
-    static ATOMIC: Atomic<usize> = Atomic::from_impl(AtomicUsize::new(0));
+    static ATOMIC: AsyncAtomic<usize> = AsyncAtomic::from_impl(AtomicUsize::new(0));
 
     let sub = &ATOMIC;
 
@@ -126,7 +126,7 @@ async fn static_() {
 #[async_test]
 async fn stream() {
     const COUNT: usize = 64;
-    let sub = Arc::new(Atomic::<usize>::new(0));
+    let sub = Arc::new(AsyncAtomic::<usize>::new(0));
     let val = sub.clone();
 
     spawn(async move {

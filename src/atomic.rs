@@ -10,12 +10,12 @@ use futures::task::AtomicWaker;
 /// *There is only a single waker, so there should be only single subscription at a time.*
 /// *Otherwise older subscriptions will not receive updates anymore.*
 #[derive(Default, Debug)]
-pub struct Atomic<T: Atom> {
+pub struct AsyncAtomic<T: Atom> {
     pub(crate) value: BasicAtomic<T>,
     pub(crate) waker: AtomicWaker,
 }
 
-impl<T: Atom> Atomic<T> {
+impl<T: Atom> AsyncAtomic<T> {
     pub fn new(value: T) -> Self {
         Self {
             value: BasicAtomic::new(value),
@@ -58,7 +58,7 @@ impl<T: Atom> Atomic<T> {
     }
 }
 
-impl<T: AtomLogic> Atomic<T>
+impl<T: AtomLogic> AsyncAtomic<T>
 where
     T::Repr: PrimitiveAtomLogic,
 {
@@ -79,7 +79,7 @@ where
     }
 }
 
-impl<T: AtomInteger> Atomic<T>
+impl<T: AtomInteger> AsyncAtomic<T>
 where
     T::Repr: PrimitiveAtomInteger,
 {
@@ -105,8 +105,8 @@ where
     }
 }
 
-impl<T: Atom> AsRef<Atomic<T>> for Atomic<T> {
-    fn as_ref(&self) -> &Atomic<T> {
+impl<T: Atom> AsRef<AsyncAtomic<T>> for AsyncAtomic<T> {
+    fn as_ref(&self) -> &AsyncAtomic<T> {
         self
     }
 }
